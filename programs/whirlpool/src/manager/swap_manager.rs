@@ -2,12 +2,10 @@ use solana_program::msg;
 
 use crate::{
     errors::ErrorCode,
-    manager::{
-        tick_manager::next_tick_cross_update, whirlpool_manager::next_whirlpool_reward_infos,
-    },
+    manager::whirlpool_manager::next_whirlpool_reward_infos,
     math::*,
     state::*,
-    util::SwapTickSequence,
+    util::{SwapTickSequence, SwapTickSequenceRef},
 };
 use anchor_lang::prelude::*;
 use std::convert::TryInto;
@@ -26,7 +24,7 @@ pub struct PostSwapUpdate {
 
 pub fn swap(
     whirlpool: &Whirlpool,
-    swap_tick_sequence: &mut SwapTickSequence,
+    swap_tick_sequence: &SwapTickSequence,
     amount: u64,
     sqrt_price_limit: u128,
     amount_specified_is_input: bool,
@@ -137,28 +135,10 @@ pub fn swap(
                 .map_or_else(|_| (None, false), |tick| (Some(tick), tick.initialized));
 
             if next_tick_initialized {
-                let (fee_growth_global_a, fee_growth_global_b) = if a_to_b {
-                    (curr_fee_growth_global_input, whirlpool.fee_growth_global_b)
-                } else {
-                    (whirlpool.fee_growth_global_a, curr_fee_growth_global_input)
-                };
-
-                let (update, next_liquidity) = calculate_update(
-                    next_tick.unwrap(),
-                    a_to_b,
-                    curr_liquidity,
-                    fee_growth_global_a,
-                    fee_growth_global_b,
-                    &next_reward_infos,
-                )?;
+                let next_liquidity =
+                    calculate_next_liquidity(&next_tick.unwrap(), a_to_b, curr_liquidity)?;
 
                 curr_liquidity = next_liquidity;
-                swap_tick_sequence.update_tick(
-                    next_array_index,
-                    next_tick_index,
-                    tick_spacing,
-                    &update,
-                )?;
             }
 
             let tick_offset = swap_tick_sequence.get_tick_offset(
@@ -206,14 +186,14 @@ pub fn swap(
         (amount_calculated, amount - amount_remaining)
     };
 
-    let fee_growth = if a_to_b {
-        curr_fee_growth_global_input - whirlpool.fee_growth_global_a
-    } else {
-        curr_fee_growth_global_input - whirlpool.fee_growth_global_b
-    };
+    // let fee_growth = if a_to_b {
+    //     curr_fee_growth_global_input - whirlpool.fee_growth_global_a
+    // } else {
+    //     curr_fee_growth_global_input - whirlpool.fee_growth_global_b
+    // };
 
     // Log delta in fee growth to track pool usage over time with off-chain analytics
-    msg!("fee_growth: {}", fee_growth);
+    // msg!("fee_growth: {}", fee_growth);
 
     Ok(PostSwapUpdate {
         amount_a,
@@ -227,7 +207,7 @@ pub fn swap(
     })
 }
 
-fn calculate_fees(
+pub fn calculate_fees(
     fee_amount: u64,
     protocol_fee_rate: u16,
     curr_liquidity: u128,
@@ -256,14 +236,7 @@ fn calculate_protocol_fee(global_fee: u64, protocol_fee_rate: u16) -> u64 {
         .unwrap()
 }
 
-fn calculate_update(
-    tick: &Tick,
-    a_to_b: bool,
-    liquidity: u128,
-    fee_growth_global_a: u128,
-    fee_growth_global_b: u128,
-    reward_infos: &[WhirlpoolRewardInfo; NUM_REWARDS],
-) -> Result<(TickUpdate, u128)> {
+pub fn calculate_next_liquidity(tick: &Tick, a_to_b: bool, liquidity: u128) -> Result<u128> {
     // Use updated fee_growth for crossing tick
     // Use -liquidity_net if going left, +liquidity_net going right
     let signed_liquidity_net = if a_to_b {
@@ -272,16 +245,13 @@ fn calculate_update(
         tick.liquidity_net
     };
 
-    let update =
-        next_tick_cross_update(tick, fee_growth_global_a, fee_growth_global_b, reward_infos)?;
-
     // Update the global liquidity to reflect the new current tick
     let next_liquidity = add_liquidity_delta(liquidity, signed_liquidity_net)?;
 
-    Ok((update, next_liquidity))
+    Ok(next_liquidity)
 }
 
-fn get_next_sqrt_prices(
+pub fn get_next_sqrt_prices(
     next_tick_index: i32,
     sqrt_price_limit: u128,
     a_to_b: bool,
