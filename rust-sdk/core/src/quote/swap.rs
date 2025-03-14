@@ -308,7 +308,7 @@ struct SwapStepQuote {
     fee_amount: u64,
 }
 
-fn compute_swap_step(
+pub fn compute_swap_step(
     amount_remaining: u64,
     fee_rate: u16,
     current_liquidity: u128,
